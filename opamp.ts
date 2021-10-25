@@ -2,10 +2,10 @@ import { makeBlock, Port, Resistor, DCVoltage, Ohms, SPICE, Volts, Simulate, ACV
 import { plot } from "https://deno.land/x/chart/mod.ts";
 
 export const NMos = watchParameters(SPICE`M${'name'} ${'source:port'} ${'gate:port'} ${'drain:port'} ${'base:port'} MOD1 L=4U W=6U AD=10P AS=10P
-.MODEL MOD1 NMOS`, ["id", "ig", "is"])
+.MODEL MOD1 NMOS`, ["id", "ig", "is", "vds", "vgs"])
 
 export const PMos = watchParameters(SPICE`M${'name'} ${'source:port'} ${'gate:port'} ${'drain:port'} ${'base:port'} MOD2 L=4U W=6U AD=10P AS=10P
-.MODEL MOD2 PMOS`, ["id", "ig", "is"])
+.MODEL MOD2 PMOS`, ["id", "ig", "is", "vds", "vgs"])
 
 export const DoubleNMosCurrentMirror = makeBlock({
     Bias: Port,

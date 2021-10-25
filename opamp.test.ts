@@ -181,12 +181,15 @@ Deno.test("Test Differential Pair", async () => {
     assertGreaterThan(Math.abs(gainA), 1);
 })
 
+
 Deno.test("Test op-amp", async () => {
+    const bias = 0;
     const Circuit = (vin: number) => makeBlock({
         VDD: DCVoltage({voltage: Volts(12)}),
         VSS: DCVoltage({voltage: Volts(12)}),
-        Vin: DCVoltage({voltage: Volts(vin)}),
-        Bias: DCCurrent({current: Amps(-1e-3)}),
+        VinP: DCVoltage({voltage: Volts(vin + bias)}),
+        VinN: DCVoltage({voltage: Volts(-vin + bias)}),
+        Bias: DCCurrent({current: Amps(-1e-6)}),
         OpAmp: OpAmp,
         Out: Port,
     }).connect((_) => [
@@ -196,9 +199,10 @@ Deno.test("Test op-amp", async () => {
         _.VSS.pos.to.Ground,
         _.VSS.neg.to.OpAmp.VSS,
 
-        _.Vin.pos.to.OpAmp.InPos,
-        _.Vin.neg.to.Ground,
-        _.Ground.to.OpAmp.InNeg,
+        _.VinP.pos.to.OpAmp.InPos,
+        _.VinP.neg.to.Ground,
+        _.VinN.pos.to.OpAmp.InNeg,
+        _.VinN.neg.to.Ground,
 
         _.OpAmp.Out.to.Out,
 
@@ -206,7 +210,21 @@ Deno.test("Test op-amp", async () => {
         _.Bias.neg.to.Ground,
     ]);
 
-    const sim = await Simulate(Circuit(-1), OperatingPoint)
+    const sim = await Simulate(Circuit(-0.25), OperatingPoint)
+
+    function checkFETsInSaturation(circuit: Record<string, any>, mosfetStates: Record<string, number>) {
+        // If this device is a MOSFET (as guessed by the presence of vds and vgs)
+        if (circuit.vds && circuit.vgs && circuit.deviceName) {
+            // Assumes a threshold voltage of 0.7 which is fairly conservative
+            mosfetStates[circuit.deviceName as string] = (circuit.vds as number[])[0] - ((circuit.vgs as number[])[0] - 0.7);
+        } else {
+            Object.keys(circuit).map((k) => {
+                if (!Array.isArray(circuit[k]) && typeof circuit[k] === 'object') {
+                    checkFETsInSaturation(circuit[k] as Record<string, any>, mosfetStates)
+                }
+            })
+        }
+    }
 
     console.log(`
 
@@ -214,20 +232,46 @@ Power Supply Currents:
     VDD: ${sim.circuit.VDD.i}
     VSS: ${sim.circuit.VSS.i}
 Bias Current: ${sim.circuit.OpAmp.MasterCurrentMirror.Ref.id}
+Bias Voltage: ${sim.circuit.OpAmp.MasterCurrentMirror.Bias}
 
 Differential Steered Current: ${sim.circuit.OpAmp.MasterCurrentMirror.Mirror1.id}
 Left Current: ${sim.circuit.OpAmp.DiffPairCurrentMirror.Ref.id}
 Right Current: ${sim.circuit.OpAmp.DiffPairCurrentMirror.Mirror.id}
-Diffpair Output Voltage: ${sim.circuit.OpAmp.DiffPair.OutPos}
 Output Amp Current: ${sim.circuit.OpAmp.MasterCurrentMirror.Mirror2.id}
+
+Input Voltage ${sim.circuit.OpAmp.InPos}
+DiffPair Bottom Voltage ${sim.circuit.OpAmp.DiffPair.Source}
+Diffpair Output Voltage: ${sim.circuit.OpAmp.DiffPair.OutPos} ${sim.circuit.OpAmp.DiffPair.OutNeg}
 Output Voltage: ${sim.circuit.OpAmp.Out}
     `)
+    console.log(JSON.stringify(sim.circuit, null, 2))
+    //console.log(sim.spice)
+    //console.log(sim.rawfile)
 
-    const out = []
+    const diffOut = []
+    const opAmpOut = []
+    const saturation = {} as Record<string, number[]>
     for (let i = -10; i <= 10; i += 0.25) {
         const sim = await Simulate(Circuit(i), OperatingPoint)
-        out.push(sim.circuit.OpAmp.DiffPair.OutPos[0])
+        diffOut.push(sim.circuit.OpAmp.DiffPair.OutPos[0])
+        opAmpOut.push(Math.max(-15, sim.circuit.OpAmp.Out[0]))
+
+        const saturatedFETS = {} as Record<string, number>;
+        checkFETsInSaturation(sim.circuit, saturatedFETS);
+        const totalCount = Object.keys(saturatedFETS).length;
+        const satCount = Object.keys(saturatedFETS).map((name) => {
+            saturation[name] = (saturation[name] || []).concat([saturatedFETS[name] > 0 ? 1 : 0]);
+            return saturatedFETS[name];
+        }).filter((s) => s > 0).length;
+        if (totalCount != satCount) {
+            //console.log("Not everything is saturated with VIN:", i)
+            //console.log(saturatedFETS)
+        }
     }
 
-    console.log(plot(out, { height: 40 }))
+    console.log(plot(opAmpOut, { height: 40 }))
+    for (const name in saturation) {
+        console.log(name + " Saturated?");
+        console.log(plot(saturation[name]))
+    }
 })
